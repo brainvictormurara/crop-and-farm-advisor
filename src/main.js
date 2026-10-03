@@ -4,7 +4,7 @@ import { fetchWikipediaProfile } from './services/wikipedia.js'
 
 document.querySelector('#app').innerHTML = `
   <header class="site-header">
-    <a class="brand" href="/" aria-label="Crop and Farm Advisor home">
+    <a class="brand" href="${import.meta.env.BASE_URL}" aria-label="Crop and Farm Advisor home">
       <span class="brand-mark" aria-hidden="true">
         <svg viewBox="0 0 32 32" fill="none">
           <path d="M25.5 6.5C15 6 7.1 10.6 7.1 18.1c0 4.2 3.1 7.2 7.1 7.2 7.9 0 11.8-8.7 11.3-18.8Z" />
