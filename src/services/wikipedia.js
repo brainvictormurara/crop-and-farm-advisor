@@ -7,6 +7,34 @@ const articleTitles = {
   Cabbage: 'Cabbage',
 }
 
+function isWikipediaUrl(value) {
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:'
+      && (url.hostname === 'wikipedia.org' || url.hostname.endsWith('.wikipedia.org'))
+  } catch {
+    return false
+  }
+}
+
+function isWikimediaImageUrl(value) {
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:'
+      && (url.hostname === 'wikimedia.org' || url.hostname.endsWith('.wikimedia.org'))
+  } catch {
+    return false
+  }
+}
+
 export async function fetchWikipediaProfile(cropName, { signal } = {}) {
   const articleTitle = articleTitles[cropName]
 
@@ -26,17 +54,22 @@ export async function fetchWikipediaProfile(cropName, { signal } = {}) {
 
   const article = await response.json()
 
-  if (!article.extract) {
+  if (!article || typeof article !== 'object' || typeof article.extract !== 'string' || !article.extract.trim()) {
     throw new Error('Wikipedia did not return a summary for this crop.')
   }
 
-  const articleUrl = article.content_urls?.desktop?.page
-    || `https://en.wikipedia.org/wiki/${encodeURIComponent(articleTitle)}`
+  const fallbackArticleUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(articleTitle)}`
+  const articleUrl = isWikipediaUrl(article.content_urls?.desktop?.page)
+    ? article.content_urls.desktop.page
+    : fallbackArticleUrl
+  const thumbnailUrl = isWikimediaImageUrl(article.thumbnail?.source)
+    ? article.thumbnail.source
+    : ''
 
   return {
     title: article.title || articleTitle,
     extract: article.extract,
-    thumbnailUrl: article.thumbnail?.source || '',
+    thumbnailUrl,
     articleUrl,
   }
 }

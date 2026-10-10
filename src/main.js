@@ -1,6 +1,8 @@
 import './style.css'
 import { findCropByName } from './data/crops.js'
+import { searchLocations } from './services/geocoding.js'
 import { fetchWikipediaProfile } from './services/wikipedia.js'
+import { fetchDailyForecast } from './services/weather.js'
 
 document.querySelector('#app').innerHTML = `
   <header class="site-header">
@@ -47,10 +49,12 @@ document.querySelector('#app').innerHTML = `
               <circle cx="10.8" cy="10.8" r="6.8" />
               <path d="m16 16 4.3 4.3" />
             </svg>
-            <input id="crop-query" name="crop" type="search" placeholder="Try tomato, wheat, or corn" autocomplete="off" />
+            <input id="crop-query" name="crop" type="search" placeholder="Try tomato, wheat, or corn" autocomplete="off" aria-describedby="crop-help crop-input-message" />
           </div>
           <button type="submit">Search <span aria-hidden="true">&#8594;</span></button>
         </div>
+        <p class="crop-help" id="crop-help">Search by crop name, such as Tomato, Wheat, or Maize.</p>
+        <p class="crop-input-message" id="crop-input-message" role="status" aria-live="polite"></p>
       </form>
     </section>
 
@@ -70,6 +74,59 @@ document.querySelector('#app').innerHTML = `
         <p class="empty-copy">Search for a crop to see its useful growing information.</p>
       </div>
     </section>
+
+    <section class="location-section" aria-labelledby="location-title">
+      <div class="location-heading">
+        <p class="eyebrow location-eyebrow"><span class="status-dot"></span> LOCAL CONDITIONS</p>
+        <h2 id="location-title">Find your location</h2>
+        <p class="location-intro">Choose a town or city to use for your farm information.</p>
+      </div>
+
+      <form class="location-search" id="location-search" role="search">
+        <label for="location-query">SEARCH BY TOWN OR CITY</label>
+        <div class="location-search-fields">
+          <div class="input-wrap location-input-wrap">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z" />
+              <circle cx="12" cy="10" r="2.5" />
+            </svg>
+            <input
+              id="location-query"
+              name="location"
+              type="search"
+              placeholder="Try Marondera, Harare, or Bulawayo"
+              autocomplete="off"
+              aria-describedby="location-help location-input-message"
+            />
+          </div>
+          <button type="submit" id="location-submit">Find location <span aria-hidden="true">&#8594;</span></button>
+        </div>
+        <p class="location-help" id="location-help">Enter at least two characters. Select the matching place from the results.</p>
+        <p class="location-input-message" id="location-input-message" role="status" aria-live="polite"></p>
+      </form>
+
+      <div class="location-search-results" id="location-results" aria-live="polite" aria-busy="false">
+        <p class="location-message">Search for a town or city to see matching locations.</p>
+      </div>
+      <p class="selected-location" id="selected-location" role="status" aria-live="polite" tabindex="-1" hidden></p>
+    </section>
+
+    <section class="weather-section" aria-labelledby="weather-title">
+      <div class="weather-heading">
+        <div>
+          <p class="weather-eyebrow">FIVE-DAY OUTLOOK</p>
+          <h2 id="weather-title">Weather forecast</h2>
+        </div>
+        <p class="weather-location" id="weather-location" aria-live="polite"></p>
+      </div>
+      <div class="weather-content" id="weather-content" aria-live="polite" aria-busy="false">
+        <p class="weather-message">Select a location above to see its five-day forecast.</p>
+      </div>
+      <p class="weather-attribution">
+        Weather data provided by
+        <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a>.
+      </p>
+    </section>
   </main>
 
   <footer class="site-footer">
@@ -82,6 +139,20 @@ const cropSearchForm = document.querySelector('#crop-search')
 const cropQueryInput = document.querySelector('#crop-query')
 const cropResults = document.querySelector('#crop-results')
 const inputWrap = cropQueryInput.closest('.input-wrap')
+const cropInputMessage = document.querySelector('#crop-input-message')
+const locationSearchForm = document.querySelector('#location-search')
+const locationQueryInput = document.querySelector('#location-query')
+const locationInputWrap = locationQueryInput.closest('.input-wrap')
+const locationSubmitButton = document.querySelector('#location-submit')
+const locationResults = document.querySelector('#location-results')
+const locationInputMessage = document.querySelector('#location-input-message')
+const selectedLocationMessage = document.querySelector('#selected-location')
+const weatherLocation = document.querySelector('#weather-location')
+const weatherContent = document.querySelector('#weather-content')
+
+let selectedLocation
+let activeLocationController
+let activeWeatherController
 
 function renderMessage(title, description) {
   cropResults.className = 'empty-state'
@@ -209,9 +280,189 @@ function renderWikipediaUnavailable(section) {
   section.append(heading, message)
 }
 
+function renderLocationMessage(message, { loading = false } = {}) {
+  locationResults.setAttribute('aria-busy', String(loading))
+  locationResults.replaceChildren()
+
+  const status = document.createElement('p')
+  status.className = 'location-message'
+  status.setAttribute('role', 'status')
+
+  if (loading) {
+    const spinner = document.createElement('span')
+    spinner.className = 'location-spinner'
+    spinner.setAttribute('aria-hidden', 'true')
+    status.append(spinner)
+  }
+
+  status.append(document.createTextNode(message))
+  locationResults.append(status)
+}
+
+function renderLocationResults(locations) {
+  locationResults.setAttribute('aria-busy', 'false')
+  locationResults.replaceChildren()
+
+  const heading = document.createElement('h3')
+  heading.className = 'location-results-heading'
+  heading.textContent = `Matching locations (${locations.length})`
+
+  const list = document.createElement('ul')
+  list.className = 'location-list'
+
+  for (const location of locations) {
+    const item = document.createElement('li')
+    const button = document.createElement('button')
+    button.className = 'location-result'
+    button.type = 'button'
+
+    const name = document.createElement('span')
+    name.className = 'location-result-name'
+    name.textContent = location.name
+
+    const details = document.createElement('span')
+    details.className = 'location-result-details'
+    details.textContent = [location.admin1, location.country].filter(Boolean).join(', ')
+
+    button.append(name, details)
+    button.addEventListener('click', () => {
+      selectedLocation = {
+        name: location.name,
+        country: location.country,
+        latitude: location.latitude,
+        longitude: location.longitude,
+      }
+
+      selectedLocationMessage.textContent =
+        `Selected location: ${selectedLocation.name}, ${selectedLocation.country}`
+      selectedLocationMessage.hidden = false
+      selectedLocationMessage.focus()
+      locationInputMessage.textContent = ''
+      locationResults.replaceChildren()
+      locationResults.setAttribute('aria-busy', 'false')
+      loadWeatherForecast(selectedLocation)
+    })
+
+    item.append(button)
+    list.append(item)
+  }
+
+  locationResults.append(heading, list)
+}
+
+function renderWeatherMessage(message, { loading = false } = {}) {
+  weatherContent.setAttribute('aria-busy', String(loading))
+  weatherContent.replaceChildren()
+
+  const status = document.createElement('p')
+  status.className = 'weather-message'
+  status.setAttribute('role', 'status')
+
+  if (loading) {
+    const spinner = document.createElement('span')
+    spinner.className = 'weather-spinner'
+    spinner.setAttribute('aria-hidden', 'true')
+    status.append(spinner)
+  }
+
+  status.append(document.createTextNode(message))
+  weatherContent.append(status)
+}
+
+function renderWeatherForecast(location, forecast) {
+  weatherContent.setAttribute('aria-busy', 'false')
+  weatherContent.replaceChildren()
+
+  const grid = document.createElement('div')
+  grid.className = 'weather-grid'
+
+  for (const day of forecast) {
+    const card = document.createElement('article')
+    card.className = 'weather-card'
+
+    const date = document.createElement('time')
+    date.className = 'weather-date'
+    date.dateTime = day.date
+    date.textContent = new Intl.DateTimeFormat('en', {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'UTC',
+    }).format(new Date(`${day.date}T00:00:00Z`))
+
+    const icon = document.createElement('span')
+    icon.className = 'weather-icon'
+    icon.setAttribute('aria-hidden', 'true')
+    icon.textContent = day.icon
+
+    const condition = document.createElement('p')
+    condition.className = 'weather-condition'
+    condition.textContent = day.description
+
+    const temperatures = document.createElement('p')
+    temperatures.className = 'weather-temperatures'
+    for (const [value, label] of [
+      [day.temperatureMax, 'high'],
+      [day.temperatureMin, 'low'],
+    ]) {
+      const temperature = document.createElement('span')
+      const degrees = document.createElement('strong')
+      degrees.textContent = `${value}°`
+      temperature.append(degrees, ` ${label}`)
+      temperatures.append(temperature)
+    }
+
+    const precipitation = document.createElement('p')
+    precipitation.className = 'weather-detail'
+    precipitation.textContent = `Precipitation: ${day.precipitation} mm`
+
+    const probability = document.createElement('p')
+    probability.className = 'weather-detail'
+    probability.textContent = `Chance of precipitation: ${day.precipitationProbability}%`
+
+    card.append(date, icon, condition, temperatures, precipitation, probability)
+    grid.append(card)
+  }
+
+  weatherContent.append(grid)
+  weatherLocation.textContent = `${location.name}, ${location.country}`
+}
+
+async function loadWeatherForecast(location) {
+  activeWeatherController?.abort()
+  const requestController = new AbortController()
+  activeWeatherController = requestController
+  weatherLocation.textContent = `${location.name}, ${location.country}`
+  renderWeatherMessage(`Loading forecast for ${location.name}...`, { loading: true })
+
+  try {
+    const forecast = await fetchDailyForecast(location, { signal: requestController.signal })
+
+    if (activeWeatherController !== requestController) {
+      return
+    }
+
+    activeWeatherController = undefined
+    renderWeatherForecast(location, forecast)
+  } catch (error) {
+    if (requestController.signal.aborted) {
+      return
+    }
+
+    if (activeWeatherController !== requestController) {
+      return
+    }
+
+    activeWeatherController = undefined
+    renderWeatherMessage(`The forecast for ${location.name} is unavailable right now. Check your connection and try again.`)
+    console.error('Weather forecast request failed.', error)
+  }
+}
+
 cropQueryInput.addEventListener('input', () => {
   cropQueryInput.removeAttribute('aria-invalid')
   inputWrap.classList.remove('has-error')
+  cropInputMessage.textContent = ''
 })
 
 let activeWikipediaController
@@ -226,6 +477,7 @@ cropSearchForm.addEventListener('submit', async (event) => {
   if (!query) {
     cropQueryInput.setAttribute('aria-invalid', 'true')
     inputWrap.classList.add('has-error')
+    cropInputMessage.textContent = 'Enter a crop name to search.'
     renderMessage('Enter a crop to search', 'Type a crop name such as Maize, Tomato, or Wheat.')
     cropQueryInput.focus()
     return
@@ -233,11 +485,16 @@ cropSearchForm.addEventListener('submit', async (event) => {
 
   cropQueryInput.removeAttribute('aria-invalid')
   inputWrap.classList.remove('has-error')
+  cropInputMessage.textContent = ''
 
   const crop = findCropByName(query)
 
   if (!crop) {
+    cropQueryInput.setAttribute('aria-invalid', 'true')
+    inputWrap.classList.add('has-error')
+    cropInputMessage.textContent = `Crop not found. Try Maize, Tomato, Onion, Wheat, Potato, or Cabbage.`
     renderMessage('Crop not found', `We couldn't find "${query}". Try Maize, Tomato, Onion, Wheat, Potato, or Cabbage.`)
+    cropQueryInput.focus()
     return
   }
 
@@ -261,5 +518,79 @@ cropSearchForm.addEventListener('submit', async (event) => {
 
     activeWikipediaController = undefined
     renderWikipediaUnavailable(wikipediaSection)
+  }
+})
+
+locationQueryInput.addEventListener('input', () => {
+  activeLocationController?.abort()
+  activeLocationController = undefined
+  locationSubmitButton.disabled = false
+  locationQueryInput.removeAttribute('aria-invalid')
+  locationInputWrap.classList.remove('has-error')
+  locationInputMessage.textContent = ''
+  locationResults.replaceChildren()
+  locationResults.setAttribute('aria-busy', 'false')
+})
+
+locationSearchForm.addEventListener('submit', async (event) => {
+  event.preventDefault()
+  activeLocationController?.abort()
+  activeLocationController = undefined
+  locationSubmitButton.disabled = false
+  locationInputMessage.textContent = ''
+
+  const query = locationQueryInput.value.trim().replace(/\s+/g, ' ')
+
+  if (!query) {
+    locationQueryInput.setAttribute('aria-invalid', 'true')
+    locationInputWrap.classList.add('has-error')
+    locationInputMessage.textContent = 'Enter a town or city to search.'
+    locationQueryInput.focus()
+    renderLocationMessage('Enter a town or city to find matching locations.')
+    return
+  }
+
+  if (query.length < 2) {
+    locationQueryInput.setAttribute('aria-invalid', 'true')
+    locationInputWrap.classList.add('has-error')
+    locationInputMessage.textContent = 'Enter at least two characters.'
+    locationQueryInput.focus()
+    renderLocationMessage('Enter at least two characters to search.')
+    return
+  }
+
+  locationQueryInput.removeAttribute('aria-invalid')
+  locationInputWrap.classList.remove('has-error')
+
+  const requestController = new AbortController()
+  activeLocationController = requestController
+  locationSubmitButton.disabled = true
+  renderLocationMessage('Searching locations...', { loading: true })
+
+  try {
+    const locations = await searchLocations(query, { signal: requestController.signal })
+
+    if (activeLocationController !== requestController) {
+      return
+    }
+
+    activeLocationController = undefined
+    locationSubmitButton.disabled = false
+
+    if (locations.length === 0) {
+      renderLocationMessage(`No matching locations found for "${query}". Try another town or city.`)
+      return
+    }
+
+    renderLocationResults(locations)
+  } catch (error) {
+    if (requestController.signal.aborted) {
+      return
+    }
+
+    activeLocationController = undefined
+    locationSubmitButton.disabled = false
+    renderLocationMessage('Location search is unavailable right now. Check your connection and try again.')
+    console.error('Location search failed.', error)
   }
 })
